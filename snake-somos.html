@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOMOS · Snake</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; background:#000; overflow:hidden; font-family:'Courier New',monospace; user-select:none; }
+  #wrap { display:flex; flex-direction:column; width:100%; height:100%; }
+  #hud { flex-shrink:0; display:flex; justify-content:space-between; padding:3px 10px; font-size:11px; color:#00ff41; letter-spacing:1px; }
+  #hud span { color:#fff; }
+  #canvasWrap { flex:1; min-height:0; position:relative; }
+  canvas { display:block; width:100%; height:100%; touch-action:none; }
+  #controls { flex-shrink:0; display:flex; flex-direction:column; align-items:center; padding:3px 0 4px; gap:3px; }
+  .btn-row { display:flex; gap:4px; }
+  .btn {
+    background:#001a00; border:2px solid #00ff41; color:#00ff41;
+    font-size:16px; font-weight:bold; width:46px; height:40px;
+    cursor:pointer; border-radius:6px; display:flex; align-items:center; justify-content:center;
+    -webkit-tap-highlight-color:transparent; touch-action:manipulation;
+  }
+  .btn.pressed,.btn:active { background:#00ff41; color:#000; }
+  .btn-wide { width:100px; font-size:10px; letter-spacing:1px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div>SCORE: <span id="scoreVal">0</span></div>
+    <div>SNAKE</div>
+    <div>BEST: <span id="bestVal">0</span></div>
+  </div>
+  <div id="canvasWrap">
+    <canvas id="c"></canvas>
+  </div>
+  <div id="controls">
+    <div class="btn-row">
+      <button class="btn" id="btnU">▲</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btnL">◀</button>
+      <button class="btn btn-wide" id="btnStart">START</button>
+      <button class="btn" id="btnR">▶</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btnD">▼</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvasWrap');
+
+let CELL = 16; // tamaño de celda, se recalcula
+let COLS, ROWS;
+
+function resize() {
+  const W = wrap.clientWidth  || wrap.offsetWidth  || 300;
+  const H = wrap.clientHeight || wrap.offsetHeight || 300;
+  canvas.width  = W;
+  canvas.height = H;
+  // Celda que divida bien el espacio
+  CELL = Math.max(10, Math.floor(Math.min(W, H) / 20));
+  COLS = Math.floor(W / CELL);
+  ROWS = Math.floor(H / CELL);
+}
+
+window.addEventListener('load', () => {
+  setTimeout(() => { resize(); init(); draw(); }, 100);
+});
+window.addEventListener('resize', () => { resize(); if (!running) draw(); });
+
+// ── STATE ──────────────────────────────────────────────────
+let snake, dir, nextDir, food, score, best=0;
+let running=false, gameOver=false, started=false;
+let gameInterval=null;
+const TICK_MS = 130; // velocidad snake
+
+function init() {
+  resize();
+  const startX = Math.floor(COLS/2);
+  const startY = Math.floor(ROWS/2);
+  snake = [
+    {x:startX,   y:startY},
+    {x:startX-1, y:startY},
+    {x:startX-2, y:startY},
+  ];
+  dir     = {x:1, y:0};
+  nextDir = {x:1, y:0};
+  score   = 0;
+  gameOver= false;
+  document.getElementById('scoreVal').textContent = 0;
+  spawnFood();
+}
+
+function spawnFood() {
+  let pos;
+  do {
+    pos = {x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS)};
+  } while (snake.some(s => s.x===pos.x && s.y===pos.y));
+  food = pos;
+  // Food type for visual variety
+  food.type = Math.floor(Math.random()*4);
+}
+
+const FOOD_COLORS = ['#ff6b6b','#f7c948','#64ffda','#ff9fff'];
+const FOOD_LABELS = ['🍎','🌟','💎','🌺'];
+
+// ── INPUT ──────────────────────────────────────────────────
+function tryDir(dx, dy) {
+  // No ir en dirección opuesta
+  if (dx === -dir.x && dy === -dir.y) return;
+  nextDir = {x:dx, y:dy};
+}
+
+function setupBtn(id, dx, dy) {
+  const btn = document.getElementById(id);
+  const go = (e) => { e.preventDefault(); tryDir(dx, dy); };
+  btn.addEventListener('mousedown', go);
+  btn.addEventListener('touchstart', go, {passive:false});
+  btn.addEventListener('click', go);
+}
+setupBtn('btnU',  0,-1);
+setupBtn('btnD',  0, 1);
+setupBtn('btnL', -1, 0);
+setupBtn('btnR',  1, 0);
+
+const startBtn = document.getElementById('btnStart');
+function handleStart(e) {
+  e.preventDefault();
+  if (!started || gameOver) { init(); started=true; running=true; startBtn.textContent='PAUSE'; startLoop(); }
+  else if (running) { running=false; startBtn.textContent='RESUME'; }
+  else { running=true; startBtn.textContent='PAUSE'; }
+}
+startBtn.addEventListener('mousedown', handleStart);
+startBtn.addEventListener('touchstart', handleStart, {passive:false});
+
+// Teclado
+function handleKey(e) {
+  if (e.code==='ArrowUp'   ||e.code==='KeyW'){e.preventDefault();tryDir(0,-1);}
+  if (e.code==='ArrowDown' ||e.code==='KeyS'){e.preventDefault();tryDir(0,1);}
+  if (e.code==='ArrowLeft' ||e.code==='KeyA'){e.preventDefault();tryDir(-1,0);}
+  if (e.code==='ArrowRight'||e.code==='KeyD'){e.preventDefault();tryDir(1,0);}
+  if (e.code==='Space'||e.code==='Enter'){e.preventDefault();handleStart(e);}
+}
+// Escuchar en document Y canvas para funcionar en iframe aunque no haya foco
+document.addEventListener('keydown', handleKey);
+canvas.addEventListener('keydown', handleKey);
+
+// Swipe touch
+let touchStart = null;
+// Click en canvas para dar foco al iframe
+canvas.addEventListener('click', () => { window.focus(); canvas.focus(); });
+canvas.setAttribute('tabindex','0');
+canvas.style.outline='none';
+canvas.addEventListener('touchstart', e => { touchStart = {x:e.touches[0].clientX, y:e.touches[0].clientY}; window.focus(); canvas.focus(); }, {passive:true});
+canvas.addEventListener('touchend', e => {
+  if (!touchStart) return;
+  const dx = e.changedTouches[0].clientX - touchStart.x;
+  const dy = e.changedTouches[0].clientY - touchStart.y;
+  if (Math.abs(dx) > Math.abs(dy)) tryDir(dx>0?1:-1, 0);
+  else tryDir(0, dy>0?1:-1);
+  touchStart = null;
+});
+
+// ── LOOP ──────────────────────────────────────────────────
+function startLoop() { stopLoop(); gameInterval=setInterval(update, TICK_MS); }
+function stopLoop()  { clearInterval(gameInterval); gameInterval=null; }
+
+function update() {
+  if (!running || gameOver) return;
+
+  dir = {...nextDir};
+  const head = {x: snake[0].x+dir.x, y: snake[0].y+dir.y};
+
+  // Paredes — wrap around
+  head.x = (head.x + COLS) % COLS;
+  head.y = (head.y + ROWS) % ROWS;
+
+  // Colisión consigo mismo
+  if (snake.some(s => s.x===head.x && s.y===head.y)) {
+    die(); return;
+  }
+
+  snake.unshift(head);
+
+  // Comer
+  if (head.x===food.x && head.y===food.y) {
+    score += 10;
+    if (score > best) best = score;
+    document.getElementById('scoreVal').textContent = score;
+    document.getElementById('bestVal').textContent  = best;
+    spawnFood();
+  } else {
+    snake.pop();
+  }
+
+  draw();
+}
+
+function die() {
+  gameOver=true; running=false;
+  stopLoop();
+  startBtn.textContent='RESTART';
+  draw();
+}
+
+// ── DRAW ──────────────────────────────────────────────────
+function draw() {
+  const W=canvas.width, H=canvas.height;
+  ctx.fillStyle='#000';
+  ctx.fillRect(0,0,W,H);
+
+  // Grid sutil
+  ctx.strokeStyle='rgba(0,255,65,0.04)';
+  ctx.lineWidth=1;
+  for(let x=0;x<COLS;x++){ctx.beginPath();ctx.moveTo(x*CELL,0);ctx.lineTo(x*CELL,H);ctx.stroke();}
+  for(let y=0;y<ROWS;y++){ctx.beginPath();ctx.moveTo(0,y*CELL);ctx.lineTo(W,y*CELL);ctx.stroke();}
+
+  if (!started) {
+    overlay('🐍 SNAKE','PRESS START','#00ff41');
+    return;
+  }
+
+  // Food
+  if (food) {
+    const fx=food.x*CELL, fy=food.y*CELL;
+    const fc=FOOD_COLORS[food.type];
+    // Glow
+    ctx.shadowColor=fc; ctx.shadowBlur=12;
+    ctx.fillStyle=fc;
+    ctx.beginPath();
+    ctx.arc(fx+CELL/2, fy+CELL/2, CELL/2-1, 0, Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+    // Shine
+    ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.beginPath();
+    ctx.arc(fx+CELL/2-2, fy+CELL/2-2, CELL/5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Snake body
+  snake.forEach((seg, i) => {
+    const t = i / snake.length;
+    // Gradiente verde → cian
+    const r = Math.round(0   + t*0);
+    const g = Math.round(255 - t*100);
+    const b = Math.round(65  + t*170);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.shadowColor = i===0 ? '#00ff41' : 'transparent';
+    ctx.shadowBlur  = i===0 ? 8 : 0;
+
+    const pad = i===0 ? 1 : 2;
+    ctx.beginPath();
+    ctx.roundRect(
+      seg.x*CELL+pad, seg.y*CELL+pad,
+      CELL-pad*2, CELL-pad*2,
+      i===0 ? 4 : 3
+    );
+    ctx.fill();
+  });
+  ctx.shadowBlur=0;
+
+  // Ojos en la cabeza
+  if (snake.length > 0) {
+    const h=snake[0];
+    const cx=h.x*CELL+CELL/2, cy=h.y*CELL+CELL/2;
+    const eyeR=Math.max(1.5, CELL/7);
+    const ex1={x:cx+dir.y*CELL/4-dir.x*CELL/6, y:cy-dir.x*CELL/4-dir.y*CELL/6};
+    const ex2={x:cx-dir.y*CELL/4-dir.x*CELL/6, y:cy+dir.x*CELL/4-dir.y*CELL/6};
+    [ex1,ex2].forEach(e=>{
+      ctx.fillStyle='#fff';
+      ctx.beginPath();ctx.arc(e.x,e.y,eyeR,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#000';
+      ctx.beginPath();ctx.arc(e.x+dir.x,e.y+dir.y,eyeR*0.5,0,Math.PI*2);ctx.fill();
+    });
+  }
+
+  // Game over
+  if (gameOver) {
+    overlay('GAME OVER','SCORE: '+score,'#ff4444');
+  }
+}
+
+function overlay(title,sub,color){
+  const W=canvas.width,H=canvas.height;
+  ctx.fillStyle='rgba(0,0,0,0.80)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=color;
+  ctx.font="bold "+Math.max(12,Math.floor(W/14))+"px 'Courier New'";
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(title,W/2,H*0.42);
+  ctx.fillStyle='#aaa';
+  ctx.font=Math.max(9,Math.floor(W/28))+"px 'Courier New'";
+  ctx.fillText(sub,W/2,H*0.58);
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+}
+</script>
+</body>
+</html>
